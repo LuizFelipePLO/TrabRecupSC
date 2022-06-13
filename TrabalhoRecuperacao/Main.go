@@ -21,11 +21,11 @@ type Requisicao struct {
 const N = 10 // numero de processos
 type inputChan [N]chan Requisicao
 
-var recurso = make(chan string, 1)
 var mutex = make(chan struct{}, 1)
 var inCh inputChan
 
 func main() {
+	var naoTermina = make(chan struct{})
 	mutex <- struct{}{}
 	for i := 0; i < N; i++ {
 		inCh[i] = make(chan Requisicao, 1)
@@ -34,9 +34,14 @@ func main() {
 		go processo(p)
 		go processoRespondedor(p)
 	}
-	retorno := <-recurso
-	fmt.Println(retorno)
+	naoTermina <- struct{}{}
+}
+func recurso(p ComponentesProcesso) {
+	fmt.Println("____________________________________________________________")
 
+	fmt.Println("Processo: " + strconv.Itoa(p.id) + " esta no recurso")
+
+	fmt.Println("____________________________________________________________")
 }
 
 func processo(p ComponentesProcesso) {
@@ -49,31 +54,42 @@ func processo(p ComponentesProcesso) {
 		p.contReqLocal = p.cont
 		for i := 0; i < N; i++ {
 			if i != p.id {
+				fmt.Println("processo:  " + strconv.Itoa(p.id) + " pedindo acesso para processo: " + strconv.Itoa(i))
 				r := Requisicao{ACK: true, id: p.id, contReq: p.contReqLocal}
 				inCh[i] <- r
+
 			}
+
 		}
 		retorno := true
-		for i := 0; i < N-1; i++ {
+
+		contador := 0
+		for contador < (N - 1) {
 			resposta := <-inCh[p.id]
+			fmt.Println("processo:  " + strconv.Itoa(p.id) + " recebendo resposta do processo: " + strconv.Itoa(resposta.id) + " resposta: " + strconv.FormatBool(resposta.ACK))
 			if resposta.ACK == false {
 				retorno = false
 			}
+			contador++
 		}
+
 		if retorno == true {
+			fmt.Println("processo: " + strconv.Itoa(p.id) + " pode acessar recurso")
 			p.estado = 2
-			mensagem := "Processo" + strconv.Itoa(p.id) + "Esta acessando o recurso"
-			recurso <- mensagem //acessa recurso
+			recurso(p)
+
 		}
 		mutex <- struct{}{} //sai secao critica
 		fmt.Println("processo saiu da secao critica: ", p.id)
-
 		p.estado = 0
-		for i := range p.filaPendentes {
+
+		contadorDependentes := 0
+		for contadorDependentes < len(p.filaPendentes) {
 			resposta := Requisicao{ACK: true, id: p.id, contReq: p.contReqLocal}
-			inCh[p.filaPendentes[i].id] <- resposta
+			fmt.Println("processo: " + strconv.Itoa(p.id) + " respondendo pendente: " + strconv.Itoa(p.filaPendentes[contadorDependentes].id))
+			inCh[p.filaPendentes[contadorDependentes].id] <- resposta
+			contadorDependentes++
 		}
-		p.filaPendentes = make([]Requisicao, N)
 
 	}
 }
@@ -81,31 +97,34 @@ func processoRespondedor(p ComponentesProcesso) {
 	fmt.Println("processo respondedor executando: ", p.id)
 	for {
 		pedido := <-inCh[p.id]
-		fmt.Println("processo" + strconv.Itoa(p.id) + "recebeu requisicao  do processo  " + strconv.Itoa(pedido.id))
+		fmt.Println("processo respondedor: " + strconv.Itoa(p.id) + " recebeu requisicao  do processo  " + strconv.Itoa(pedido.id))
 		if pedido.contReq > p.cont {
 			p.cont = pedido.contReq + 1
 		}
 
 		switch p.estado {
 		case 0:
+			fmt.Println("processo respondedor: " + strconv.Itoa(p.id) + " respondeu requisicao com ok para o processo  " + strconv.Itoa(pedido.id))
 			resposta := Requisicao{ACK: true, id: p.id, contReq: p.contReqLocal}
 			inCh[pedido.id] <- resposta
-			return
 
 		case 1:
 			if p.contReqLocal < pedido.contReq {
+				fmt.Println("processo" + strconv.Itoa(p.id) + " respondeu requisicao com ok pois pedido é anterior para o processo " + strconv.Itoa(pedido.id))
 				resposta := Requisicao{ACK: true, id: p.id, contReq: p.contReqLocal}
 				inCh[pedido.id] <- resposta
-				return
 			} else if p.contReqLocal == pedido.contReq && pedido.id < p.id {
+				fmt.Println("processo" + strconv.Itoa(p.id) + " respondeu requisicao com ok pois pedido tem id menor para o processo " + strconv.Itoa(pedido.id))
 				resposta := Requisicao{ACK: true, id: p.id, contReq: p.contReqLocal}
 				inCh[pedido.id] <- resposta
-				return
+			} else {
+				fmt.Println("processo" + strconv.Itoa(p.id) + " recebeu requisicao competiu e perdeu para o processo  " + strconv.Itoa(pedido.id))
+				p.filaPendentes = append(p.filaPendentes, pedido)
 			}
-			p.filaPendentes = append(p.filaPendentes, pedido)
-
 		case 2:
+			fmt.Println("processo" + strconv.Itoa(p.id) + " esta na secao critica adicionou pendente  " + strconv.Itoa(pedido.id))
 			p.filaPendentes = append(p.filaPendentes, pedido)
+			fmt.Println("processo: " + strconv.Itoa(pedido.id) + " foi adicionado como pendente do processo: " + strconv.Itoa(p.id))
 		}
 
 	}
